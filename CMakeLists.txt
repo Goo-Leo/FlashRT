@@ -183,6 +183,13 @@ option(FLASHRT_ENABLE_COSMOS3_EDGE
        "Build Cosmos3-Edge AV kernels and bindings for Jetson AGX Thor" OFF)
 option(FLASHRT_ENABLE_COSMOS3_REASONER
        "Build Cosmos3 Reasoner kernels and bindings for Jetson AGX Thor" OFF)
+option(FLASHRT_ENABLE_ALPAMAYO15
+       "Build Alpamayo 1.5 kernels and bindings for Jetson AGX Thor" OFF)
+if(FLASHRT_ENABLE_ALPAMAYO15 AND NOT GPU_ARCH STREQUAL "110")
+  message(FATAL_ERROR
+    "Alpamayo 1.5 kernels require GPU_ARCH=110; current GPU_ARCH=${GPU_ARCH}. "
+    "Disable FLASHRT_ENABLE_ALPAMAYO15 for non-Thor builds.")
+endif()
 if((FLASHRT_ENABLE_COSMOS3_EDGE OR FLASHRT_ENABLE_COSMOS3_REASONER) AND
    NOT GPU_ARCH STREQUAL "110")
   message(FATAL_ERROR
@@ -1787,6 +1794,49 @@ else()
   message(STATUS "Cosmos3 Reasoner kernels: DISABLED")
 endif()
 
+if(FLASHRT_ENABLE_ALPAMAYO15)
+  # FlashDrive W4A8 prefill GEMM (CUTLASS sm100 groupwise INT8, tcgen05). No fast-math: the
+  # epilogue reproduces Marlin's int32 -> float -> * scale -> half rounding exactly.
+  add_library(alpamayo15_fd_w4a8_obj OBJECT csrc/gemm/alpamayo15_flashdrive_w4a8_sm100.cu)
+  set_target_properties(alpamayo15_fd_w4a8_obj PROPERTIES
+    CUDA_STANDARD 17
+    POSITION_INDEPENDENT_CODE ON
+  )
+  target_include_directories(alpamayo15_fd_w4a8_obj PRIVATE
+    ${CUTLASS_INCLUDE}
+    ${CUTLASS_DIR}/tools/util/include
+  )
+  target_compile_options(alpamayo15_fd_w4a8_obj PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr -O3 ${GPU_GENCODE}>
+  )
+  # the GEMMs honour programmatic dependent launch (they wait for the previous kernel before reading their operands)
+  target_compile_definitions(alpamayo15_fd_w4a8_obj PRIVATE CUTLASS_ENABLE_GDC_FOR_SM100=1)
+  # BF16 GEMMs (vision tower, action expert) on tcgen05 with fused bias / GELU / residual epilogues.
+  add_library(alpamayo15_bf16_gemm_obj OBJECT csrc/gemm/alpamayo15_bf16_gemm_sm100.cu)
+  set_target_properties(alpamayo15_bf16_gemm_obj PROPERTIES
+    CUDA_STANDARD 17
+    POSITION_INDEPENDENT_CODE ON
+  )
+  target_include_directories(alpamayo15_bf16_gemm_obj PRIVATE
+    ${CUTLASS_INCLUDE}
+    ${CUTLASS_DIR}/tools/util/include
+  )
+  target_compile_options(alpamayo15_bf16_gemm_obj PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr -O3 ${GPU_GENCODE}>
+  )
+  target_compile_definitions(alpamayo15_bf16_gemm_obj PRIVATE CUTLASS_ENABLE_GDC_FOR_SM100=1)
+  target_sources(flash_rt_kernels PRIVATE csrc/kernels/alpamayo15_kernels.cu
+                                         csrc/kernels/alpamayo15_request_kernels.cu
+                                         csrc/gemm/alpamayo15_cublaslt.cu
+                                         csrc/kernels/alpamayo15_flashdrive_kernels.cu
+                                         $<TARGET_OBJECTS:alpamayo15_fd_w4a8_obj>
+                                         $<TARGET_OBJECTS:alpamayo15_bf16_gemm_obj>)
+  target_compile_definitions(flash_rt_kernels PRIVATE FLASHRT_HAVE_ALPAMAYO15=1)
+  message(STATUS "Alpamayo 1.5 kernels: ENABLED (sm_110)")
+else()
+  message(STATUS "Alpamayo 1.5 kernels: DISABLED")
+endif()
+
 if(FLASHRT_ENABLE_AUDIO_CODEBOOK)
   target_sources(flash_rt_kernels PRIVATE
     csrc/kernels/delayed_codebook_kernels.cu)
@@ -2297,6 +2347,12 @@ if(ENABLE_SM100_CUTLASS)
       csrc/gemm/fp4/cosmos3_edge_fp4_gemm_relu2_fp4out.cu)
     target_compile_definitions(fp4_kernels_obj PRIVATE FLASHRT_HAVE_COSMOS3_EDGE=1)
   endif()
+  if(FLASHRT_ENABLE_ALPAMAYO15)
+    target_sources(fp4_kernels_obj PRIVATE
+      csrc/gemm/fp4/alpamayo15_nvfp4_gemm_sm100.cu
+      csrc/quantize/alpamayo15_nvfp4_rows.cu)
+    target_compile_definitions(fp4_kernels_obj PRIVATE FLASHRT_HAVE_ALPAMAYO15=1)
+  endif()
   set_target_properties(fp4_kernels_obj PROPERTIES
     CUDA_STANDARD 17
     POSITION_INDEPENDENT_CODE ON
@@ -2330,6 +2386,9 @@ if(ENABLE_SM100_CUTLASS)
   )
   if(FLASHRT_ENABLE_COSMOS3_EDGE)
     target_compile_definitions(flash_rt_fp4 PRIVATE FLASHRT_HAVE_COSMOS3_EDGE=1)
+  endif()
+  if(FLASHRT_ENABLE_ALPAMAYO15)
+    target_compile_definitions(flash_rt_fp4 PRIVATE FLASHRT_HAVE_ALPAMAYO15=1)
   endif()
   target_link_libraries(flash_rt_fp4 PRIVATE CUDA::cudart)
   install(TARGETS flash_rt_fp4 DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/flash_rt)

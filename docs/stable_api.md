@@ -735,3 +735,12 @@ The frontend consumes the model package; it does not replace runtime methods.
 LIBERO outputs are `(10, 7)`. Other hardware/frameworks and unimplemented precision
 requests fail explicitly. Full-action numerical and gripper-decision validation
 remains required; see [DM05 validation](dm05_sm120.md#complete-action-validation).
+
+## Alpamayo trajectory frontends
+
+Alpamayo produces trajectories and reasoning from camera frames and ego history,
+not VLAModel.predict(images). load_model(config="alpamayo15") and
+load_model(config="alpamayo15_flashdrive") raise an explicit redirect to their
+dedicated Thor frontends. Existing model routes and predict signatures are
+unchanged. See [the consolidated guide](alpamayo15.md) for imports, checkpoint
+selection, reset behavior and four-arm reproduction.
