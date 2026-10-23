@@ -260,6 +260,33 @@ plain in the same process, emitting the same tokens as greedy decoding. See
 
 **Guide:** [Thor](docs/qwen36_moe_usage.md#jetson-agx-thor-numbers) · [RTX 5090](docs/qwen36_moe_usage.md).
 
+#### Flint (official NVFP4 GGUF)
+
+FlashRT W4A16 kernels and a torch frontend for RTX 5090. Batch 1, greedy,
+identical public token inputs; both executors use full-forward wall time.
+The reference is stock llama.cpp CUDA at `1b44e30`; FlashRT uses BF16 KV,
+llama.cpp F16 KV. [Protocol, accuracy and reproduction](docs/flint_usage.md).
+
+**Decode** (256 steps after prefill):
+
+| Context tokens | llama.cpp tok/s | FlashRT tok/s | Speedup | Throughput increase |
+|---:|---:|---:|---:|---:|
+| 1,024 | 234.8 | **683.6** | **2.91×** | +191.1% |
+| 8,192 | 217.9 | **603.0** | **2.77×** | +176.8% |
+| 32,768 | 197.7 | **478.9** | **2.42×** | +142.3% |
+| 102,400 | 157.8 | **303.8** | **1.93×** | +92.5% |
+
+**Prefill** (through the first generated token):
+
+| Prompt tokens | llama.cpp ms | FlashRT ms | Speedup | Latency reduction |
+|---:|---:|---:|---:|---:|
+| 1,024 | 105.0 | **41.4** | **2.54×** | 60.6% |
+| 8,192 | 681.4 | **267.9** | **2.54×** | 60.7% |
+| 32,768 | 3,126.0 | **1,603.2** | **1.95×** | 48.7% |
+| 102,400 | 14,410.5 | **9,476.2** | **1.52×** | 34.2% |
+
+**Guide:** [RTX 5090 setup and limits](docs/flint_usage.md).
+
 #### Qwen3-8B
 
 | Hardware | Mode | Prefill | Decode | Source |
