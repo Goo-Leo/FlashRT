@@ -382,7 +382,7 @@ def load_model(checkpoint, framework="torch", num_views=2, autotune=3,
             and force fresh FP8 quantization + calibration.
         weight_cache: if True (default), cache FP8-quantized weights to disk
             after first load. Only affects JAX.
-        config: model config name: "pi05", "pi0", "groot", "groot_n17",
+        config: model config name: "pi05", "pi0", "groot", "groot_n15", "groot_n17",
             "pi0fast", "motus", "dm05", "wan22_ti2v_5b", "cosmos3_video",
             "cosmos3_edge", "xvla", "ltx25".
             "xvla" is lerobot/xvla-libero on RTX SM120/SM121 (torch only;
@@ -619,13 +619,14 @@ def load_model(checkpoint, framework="torch", num_views=2, autotune=3,
             raise ValueError(
                 f"Unknown Jetson-PI config: {config}. "
                 "Supported: pi0, pi05, llm, mllm")
-    elif config not in ("pi05", "groot", "groot_n17", "pi0", "pi0fast",
+    elif config not in ("pi05", "groot", "groot_n15", "groot_n17", "pi0",
+                      "pi0fast",
                       "motus", "wan22_ti2v_5b", "cosmos3_video",
                       "cosmos3_edge", "nexn2", "qwen36_moe", "spark_x25",
                       "flint", "hyvla", "xvla", "ltx25", "dm05", "qwen3_4b"):
         raise ValueError(
             f"Unknown config: {config}. "
-            f"Supported: pi05, groot, groot_n17, pi0, pi0fast, motus, "
+            f"Supported: pi05, groot, groot_n15, groot_n17, pi0, pi0fast, motus, "
             f"wan22_ti2v_5b, cosmos3_video, cosmos3_edge, nexn2, "
             f"qwen36_moe, spark_x25, flint, hyvla, xvla, ltx25, dm05, qwen3_4b")
     if framework not in ("torch", "jax", "jetson_pi"):
@@ -1225,7 +1226,7 @@ def load_model(checkpoint, framework="torch", num_views=2, autotune=3,
             decode_graph_steps=decode_graph_steps,
             max_decode_steps=max_decode_steps,
         )
-    elif config in ("groot", "groot_n17"):
+    elif config in ("groot", "groot_n15", "groot_n17"):
         # rtx-side GROOT accepts embodiment_tag + action_horizon; Thor-side
         # GROOT accepts embodiment_tag + autotune. Feature-detect via the
         # concrete class signature so one call site works for both.
