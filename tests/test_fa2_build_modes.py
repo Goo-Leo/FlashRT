@@ -15,6 +15,12 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILD_DIR = Path(os.environ.get("FLASHRT_BUILD_DIR", REPO_ROOT / "build"))
 EXPECTED_RAW_EXPORTS = {
+    "fvk_attention_fa2_lawam_fwd_fp16",
+    "fvk_attention_fa2_lawam_fwd_bf16",
+    "fvk_attention_fa2_lawam_fwd_bf16_fp8out",
+    "fvk_attention_fa2_lawam_fwd_fp16_causal",
+    "fvk_attention_fa2_lawam_fwd_bf16_causal",
+
     "fvk_attention_fa2_fwd_bf16_tile64",
     "fvk_attention_fa2_fwd_bf16_tile64m32",
     "fvk_attention_fa2_fwd_bf16_tile64m32w2",
@@ -137,7 +143,10 @@ def test_built_raw_library_has_exact_export_surface():
         errors="replace",
     )
     exports = {line.split()[-1] for line in output.splitlines() if line.split()}
-    assert exports == EXPECTED_RAW_EXPORTS
+    expected = set(EXPECTED_RAW_EXPORTS)
+    if _cache_bool("FLASHRT_ENABLE_CHAMELEON") or _cache_bool("FLASHRT_ENABLE_LAWAM"):
+        expected.add("fvk_attention_fa2_fwd_fp16_causal")
+    assert exports == expected
 
     dynamic = _readelf_dynamic(raw)
     assert "libpython" not in dynamic
@@ -184,8 +193,14 @@ def test_built_adapter_chameleon_symbol_matches_build_mode():
     assert hasattr(module, "fwd_bf16_fp8out")
     assert hasattr(module, "fwd_bf16_causal_fp8out")
     assert hasattr(module, "fwd_bf16_tile")
-    assert hasattr(module, "fwd_fp16_causal") == _cache_bool(
-        "FLASHRT_ENABLE_CHAMELEON")
+    # the FP16 causal entry is only instantiated for head_dim 128 with FP16
+    # enabled, and only by Chameleon or LaWAM
+    hdims = (_cache_value("FA2_HDIMS") or "").split(";")
+    dtypes = (_cache_value("FA2_DTYPES") or "").split(";")
+    fp16_causal = ((_cache_bool("FLASHRT_ENABLE_CHAMELEON")
+                    or _cache_bool("FLASHRT_ENABLE_LAWAM"))
+                   and "128" in hdims and "fp16" in dtypes)
+    assert hasattr(module, "fwd_fp16_causal") == fp16_causal
 
 
 def test_chameleon_fa2_compile_contract_is_consistent():
@@ -200,9 +215,13 @@ def test_chameleon_fa2_compile_contract_is_consistent():
 
     assert "target_compile_definitions(fa2_vendor_obj PRIVATE\n      FLASHRT_ENABLE_CHAMELEON=1)" in cmake
     assert "target_compile_definitions(flash_rt_fa2 PRIVATE\n        FLASHRT_ENABLE_CHAMELEON=1)" in cmake
-    assert "defined(FLASHRT_ENABLE_CHAMELEON) && defined(FA2_HAS_FP16)" in wrapper
-    assert "#ifdef FLASHRT_ENABLE_CHAMELEON\nFLASHRT_FA2_NATIVE_API void fvk_attention_fa2_fwd_fp16_causal" in header
-    assert "#ifdef FLASHRT_ENABLE_CHAMELEON\n    // FP16 causal sibling" in bindings
+    # the FP16 causal entry is shared by Chameleon and LaWAM through one gate
+    assert "(FLASHRT_ENABLE_CHAMELEON OR FLASHRT_ENABLE_LAWAM)" in cmake
+    assert "target_compile_definitions(fa2_vendor_obj PRIVATE FLASHRT_FA2_FP16_CAUSAL=1)" in cmake
+    assert "target_compile_definitions(flash_rt_fa2 PRIVATE FLASHRT_FA2_FP16_CAUSAL=1)" in cmake
+    assert "defined(FLASHRT_FA2_FP16_CAUSAL) && defined(FA2_HAS_FP16)" in wrapper
+    assert "#ifdef FLASHRT_FA2_FP16_CAUSAL\nFLASHRT_FA2_NATIVE_API void fvk_attention_fa2_fwd_fp16_causal" in header
+    assert "#ifdef FLASHRT_FA2_FP16_CAUSAL\n    // FP16 causal sibling" in bindings
 
 
 def test_unused_fp8_bias_autotune_api_is_absent():

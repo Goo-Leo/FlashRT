@@ -294,6 +294,16 @@ option(FLASHRT_ENABLE_DM05
 # Ada (sm_89) build with -DFLASHRT_ENABLE_GROOT_N15=ON.
 option(FLASHRT_ENABLE_GROOT_N15
        "Build GR00T N1.5 RTX SM89 kernels in flash_rt_groot_n15" OFF)
+
+# LaWAM (latent world action model VLA) — builds flash_rt_lawam.so with the
+# kernels FlashRT has no equivalent for: camera patchification for the Qwen3-VL
+# and DINOv3 towers, the gated AdaLN rows of the LAM decoder, the VLM-to-latent
+# QFormer, and the positional-embedding consumers of the skinny NVFP4 flow DiT.
+# Opt-in, separate from flash_rt_kernels; enable on a Blackwell (sm_120) build
+# with -DFLASHRT_ENABLE_LAWAM=ON.
+option(FLASHRT_ENABLE_LAWAM
+       "Build LaWAM RTX SM120 fused kernels in flash_rt_lawam" OFF)
+
 # Shared delayed-codebook helper used by discrete-audio paths. Kept behind an
 # explicit option so deployment builds that do not serve audio can remove the
 # TU and its binding in lockstep.
@@ -1155,8 +1165,11 @@ if(ENABLE_FA2 AND
       csrc/attention/fa2_causal_inst/flash_fwd_split_hdim256_bf16_sm80_causal.cu
     )
   endif()
-  # fp16 hdim=128 serves Chameleon-7B causal prefill/decode on Orin SM87.
-  if(FLASHRT_ENABLE_CHAMELEON AND "128" IN_LIST FA2_HDIMS AND "fp16" IN_LIST FA2_DTYPES)
+  # fp16 hdim=128 serves Chameleon-7B causal prefill/decode on Orin SM87 and
+  # the LaWAM Qwen3-VL prefix (FP16 operands end to end) on SM120.
+  set(FA2_FP16_CAUSAL OFF)
+  if((FLASHRT_ENABLE_CHAMELEON OR FLASHRT_ENABLE_LAWAM) AND "128" IN_LIST FA2_HDIMS AND "fp16" IN_LIST FA2_DTYPES)
+    set(FA2_FP16_CAUSAL ON)
     list(APPEND FA2_SRCS
       csrc/attention/fa2_causal_inst/flash_fwd_hdim128_fp16_sm80_causal.cu
       csrc/attention/fa2_causal_inst/flash_fwd_split_hdim128_fp16_sm80_causal.cu
@@ -1315,6 +1328,15 @@ if(ENABLE_FA2 AND
     target_compile_definitions(fa2_vendor_obj PRIVATE
       FLASHRT_ENABLE_CHAMELEON=1)
   endif()
+  if(FA2_FP16_CAUSAL)
+    target_compile_definitions(fa2_vendor_obj PRIVATE FLASHRT_FA2_FP16_CAUSAL=1)
+  endif()
+  # Compile LaWAM's optional short tiles. Only the dedicated LaWAM entries
+  # set lawam_short_tiles; existing entries keep the upstream dispatch.
+  if(FLASHRT_ENABLE_LAWAM)
+    target_compile_definitions(fa2_vendor_obj PRIVATE
+      FLASHRT_FA2_SM12X_SHORT_TILES=1)
+  endif()
 
   string(REPLACE ";" "," _FA2_H "${FA2_BUILT_HDIMS}")
   string(REPLACE ";" "," _FA2_D "${FA2_BUILT_DTYPES}")
@@ -1367,6 +1389,13 @@ if(ENABLE_FA2 AND
     if(FLASHRT_ENABLE_CHAMELEON)
       target_compile_definitions(flash_rt_fa2 PRIVATE
         FLASHRT_ENABLE_CHAMELEON=1)
+    endif()
+    if(FA2_FP16_CAUSAL)
+      target_compile_definitions(flash_rt_fa2 PRIVATE FLASHRT_FA2_FP16_CAUSAL=1)
+    endif()
+    if(FLASHRT_ENABLE_LAWAM)
+      target_compile_definitions(flash_rt_fa2 PRIVATE
+        FLASHRT_FA2_SM12X_SHORT_TILES=1)
     endif()
     if(FLASHRT_ENABLE_NATIVE_CPP)
       target_compile_definitions(flash_rt_fa2 PRIVATE
@@ -1496,6 +1525,51 @@ if(FLASHRT_ENABLE_GROOT_N15)
   message(STATUS "GR00T N1.5 SM89 kernels: ENABLED")
 else()
   message(STATUS "GR00T N1.5 SM89 kernels: DISABLED")
+endif()
+
+# ── LaWAM fused kernels (standalone module, independent of flash_rt_kernels) ──
+if(FLASHRT_ENABLE_LAWAM)
+  if(NOT GPU_ARCH STREQUAL "120")
+    message(FATAL_ERROR
+      "FLASHRT_ENABLE_LAWAM requires GPU_ARCH=120 (Blackwell / sm_120); "
+      "got '${GPU_ARCH}'.")
+  endif()
+  if(NOT FA2_FP16_CAUSAL)
+    message(FATAL_ERROR
+      "FLASHRT_ENABLE_LAWAM requires the FA2 FP16 causal head-dim-128 entry "
+      "(the Qwen3-VL LLM prefix). Build with ENABLE_FA2, 128 in FA2_HDIMS and "
+      "fp16 in FA2_DTYPES.")
+  endif()
+  pybind11_add_module(flash_rt_lawam
+    csrc/lawam_bindings.cpp
+    csrc/kernels/lawam/lawam_kernels.cu
+    csrc/kernels/lawam/lawam_dit_sm120.cu
+    csrc/kernels/lawam/lawam_gemm_f16acc.cu
+    csrc/kernels/lawam/lawam_w8a16_skinny_sm120.cu
+    csrc/kernels/lawam/lawam_w4a16_skinny_sm120.cu
+    csrc/kernels/lawam/lawam_gemm_f16acc_act.cu
+    csrc/kernels/lawam/lawam_gemm_persistent_sm120.cu
+    csrc/kernels/lawam/lawam_dit_cross_attention_sm120.cu
+    csrc/kernels/lawam/lawam_dit_persistent_sm120.cu)
+  set_target_properties(flash_rt_lawam PROPERTIES
+    CUDA_STANDARD 17
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/flash_rt
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/flash_rt)
+  target_include_directories(flash_rt_lawam PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/csrc
+    ${CMAKE_CURRENT_SOURCE_DIR}/csrc/kernels
+    ${CUTLASS_INCLUDE}
+    ${CUTLASS_DIR}/examples)
+  target_compile_options(flash_rt_lawam PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:
+      --expt-relaxed-constexpr -O3
+      ${GPU_GENCODE}
+    >)
+  target_link_libraries(flash_rt_lawam PRIVATE CUDA::cudart CUDA::cublasLt)
+  install(TARGETS flash_rt_lawam LIBRARY DESTINATION flash_rt)
+  message(STATUS "LaWAM SM120 kernels: ENABLED")
+else()
+  message(STATUS "LaWAM SM120 kernels: DISABLED")
 endif()
 
 # ── MiniMax-Remover fused kernels (standalone module, independent

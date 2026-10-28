@@ -36,7 +36,7 @@ def load_model(
     autotune: int = 3,              # 0=off, 3=default, 5+=thorough
     recalibrate: bool = False,
     weight_cache: bool = True,      # JAX only
-    config: str = "pi05",           # "pi05" | "pi0" | "groot" | "groot_n15" | "groot_n17" | "pi0fast" | "motus" | "wan22_ti2v_5b" | "cosmos3_video" | "cosmos3_edge" | "chameleon" | "hyvla" | "xvla"
+    config: str = "pi05",           # "pi05" | "pi0" | "groot" | "groot_n15" | "groot_n17" | "pi0fast" | "motus" | "wan22_ti2v_5b" | "cosmos3_video" | "cosmos3_edge" | "chameleon" | "hyvla" | "xvla" | "lawam"
     device=None,                    # reserved
     # Pi0-FAST-specific:
     decode_cuda_graph: bool = False,
@@ -776,6 +776,16 @@ The frontend consumes the model package; it does not replace runtime methods.
 LIBERO outputs are `(10, 7)`. Other hardware/frameworks and unimplemented precision
 requests fail explicitly. Full-action numerical and gripper-decision validation
 remains required; see [DM05 validation](dm05_sm120.md#complete-action-validation).
+
+### LaWAM on RTX SM120
+
+`load_model(checkpoint, config="lawam", framework="torch", hardware="rtx_sm120")`
+selects `LawamTorchFrontendRtx` for the LeRobot LaWAM checkpoint; it needs
+`FLASHRT_ENABLE_LAWAM=ON` for `flash_rt_lawam`. `predict([primary, wrist],
+prompt=task)` takes two uint8 256x256 RGB views and returns the unnormalized
+`(action_horizon, 7)` chunk; `infer(frames, noise=...)` accepts the initial flow
+sample for reproducible comparisons. Other hardware/frameworks fail explicitly.
+Precision tiers and validation: [LaWAM on RTX SM120](lawam_rtx.md).
 
 ## Alpamayo trajectory frontends
 
